@@ -37,6 +37,9 @@ Bewerbung/
 # Downloaded course materials
 studon_downloads/
 
+# Recent updates log (personal download history)
+RECENT_UPDATES.md
+
 # State files (contains timestamps, might be machine-specific)
 .studon_updater_state.json
 

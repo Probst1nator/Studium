@@ -22,6 +22,16 @@ User Login → Script Starts → Waits for Firefox → Syncs All Courses → Exi
 
 ## Installation
 
+### Platform Compatibility
+
+**Tested on:** [Kubuntu Linux](https://kubuntu.org/) (Ubuntu with KDE Plasma desktop)
+
+**Should work on:** Windows, macOS, other Linux distributions (untested but theoretically compatible)
+
+**Note:** The automatic daily sync feature (cron-based) is designed for Linux/Unix systems. Windows users may need to use Task Scheduler or alternative scheduling methods.
+
+**New to Linux?** Check out [Kubuntu](https://kubuntu.org/getkubuntu/) - it's open-source, user-friendly, and provides a well featured kde desktop environment!
+
 ### Prerequisites
 
 1. **Firefox Browser** - Must be logged into StudOn
@@ -135,7 +145,7 @@ Studium/
 
 ## Multi-Device Setup
 
-If you store this folder in a cloud sync service (OneDrive, Dropbox, Google Drive, etc.), the state and downloaded files can sync across devices automatically.
+If you store this folder in a cloud sync service (Syncthing, OneDrive, Dropbox, Google Drive, etc.), the state and downloaded files can sync across devices automatically.
 
 ### On Each Device:
 
@@ -322,20 +332,16 @@ Found a bug? Want to add a feature? Contributions are welcome!
 3. Make your changes
 4. Submit a pull request
 
-## Common Issues for KI-Materialtechnologie Students
+## For KI-Materialtechnologie Students
 
-### Course-Specific Notes
-
-- **Charakterisierung und Prüfung von Werkstoffen**: Usually has many PDF files
-- **Einführung in Simulationsverfahren**: Contains Jupyter notebooks (.ipynb) and Python files
-- **Labworks**: Contains protocol templates and experiment descriptions
-
-### Semester Updates
+### New Semester Setup
 
 At the start of each semester:
-1. Log into StudOn and enroll in your courses
-2. Run `python studon_scraper.py --update-all --force` to fetch everything
-3. The daily sync will handle updates from then on
+1. Log into StudOn in Firefox and enroll in your new courses
+2. Download each new course once: `python studon_scraper.py "<course-url>"`
+3. From then on, the daily sync will automatically check all courses for new files
+
+**Note:** The scraper NEVER deletes old files. It only downloads new files that don't exist yet. Your old course materials from previous semesters stay untouched.
 
 ## License
 

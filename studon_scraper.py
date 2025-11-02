@@ -212,6 +212,87 @@ def extract_all_archives(root_path: str) -> int:
 
     return extracted_count
 
+def format_file_size(size_bytes: int) -> str:
+    """Convert file size in bytes to human-readable format."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} TB"
+
+def update_recent_files_log(downloaded_files_info: List[Dict[str, str]], base_download_path: str) -> None:
+    """
+    Updates the RECENT_UPDATES.md file with newly downloaded files.
+
+    Args:
+        downloaded_files_info: List of dicts with keys: filepath, timestamp, course, size_bytes
+        base_download_path: Base path for downloads (to create relative paths)
+    """
+    if not downloaded_files_info:
+        return
+
+    log_file = os.path.join(base_download_path, "RECENT_UPDATES.md")
+
+    # Read existing entries if file exists
+    existing_entries = []
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                # Skip header lines and extract table rows
+                for line in lines:
+                    if line.startswith('|') and 'Date/Time' not in line and '---' not in line:
+                        existing_entries.append(line.strip())
+        except Exception as e:
+            print(f"   ⚠️ Could not read existing log: {e}")
+
+    # Format new entries
+    new_entries = []
+    for file_info in downloaded_files_info:
+        filepath = file_info['filepath']
+        timestamp = file_info['timestamp']
+        course = file_info['course']
+        size_bytes = file_info['size_bytes']
+
+        # Get relative path from base_download_path
+        try:
+            rel_path = os.path.relpath(filepath, base_download_path)
+        except ValueError:
+            rel_path = filepath  # Fallback if paths are on different drives
+
+        filename = os.path.basename(filepath)
+        size_str = format_file_size(size_bytes)
+
+        # Format: | Date/Time | Course | Filename | Relative Path | Size |
+        entry = f"| {timestamp} | {course} | {filename} | {rel_path} | {size_str} |"
+        new_entries.append(entry)
+
+    # Combine all entries (new + existing)
+    all_entries = new_entries + existing_entries
+
+    # Sort by timestamp (newest first) - extract timestamp from each line
+    def get_timestamp(entry_line: str) -> str:
+        parts = entry_line.split('|')
+        if len(parts) >= 2:
+            return parts[1].strip()  # timestamp is second column
+        return ""
+
+    all_entries.sort(key=get_timestamp, reverse=True)
+
+    # Write the complete log file
+    try:
+        with open(log_file, 'w', encoding='utf-8') as f:
+            f.write("# StudOn Recent Updates\n\n")
+            f.write(f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("| Date/Time | Course | Filename | Relative Path | Size |\n")
+            f.write("|-----------|--------|----------|---------------|------|\n")
+            for entry in all_entries:
+                f.write(entry + "\n")
+
+        print(f"\n📝 Updated recent files log: {log_file}")
+    except Exception as e:
+        print(f"   ⚠️ Could not write log file: {e}")
+
 # --- CORE LOGIC ---
 
 def discover_items_recursive(page_url: str, current_path: str, session: requests.Session, file_list: List[Dict[str, str]], course_title: Optional[str] = None, debug: bool = False) -> None:
@@ -330,6 +411,7 @@ def download_all_files(source: str, files_to_download: List[Dict[str, str]], ses
     print(f"🚀 Starting download of {len(files_to_download)} files...")
     download_count: int = 0
     downloaded_files: List[str] = []
+    downloaded_files_info: List[Dict] = []  # For logging
 
     # Use provided base_path or fall back to DOWNLOAD_FOLDER
     metadata_folder = base_path if base_path else DOWNLOAD_FOLDER
@@ -397,10 +479,26 @@ Last fetched: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
             print(f"   ✅ Successfully saved to: {filepath}")
             download_count += 1
             downloaded_files.append(filepath)
+
+            # Collect metadata for logging
+            try:
+                file_size = os.path.getsize(filepath)
+                downloaded_files_info.append({
+                    'filepath': filepath,
+                    'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'course': file_info.get('course_title', course_title or 'Unknown Course'),
+                    'size_bytes': file_size
+                })
+            except Exception:
+                pass  # If we can't get size, just skip logging this file
         except requests.exceptions.RequestException as e:
             print(f"   ❌ Error downloading {file_url}: {e}")
         except OSError as e:
             print(f"   ❌ File system error saving to {save_path}: {e}")
+
+    # Update the recent files log if any files were downloaded
+    if downloaded_files_info:
+        update_recent_files_log(downloaded_files_info, DOWNLOAD_FOLDER)
 
     return download_count, downloaded_files
 
