@@ -1,6 +1,6 @@
 # StudOn Auto-Downloader
 
-Automated downloader for StudOn course materials at FAU (Friedrich-Alexander-Universität Erlangen-Nürnberg). Perfect for KI-Materialtechnologie students and anyone who wants to keep their course materials synchronized automatically.
+Automated downloader for StudOn course materials at FAU (Friedrich-Alexander-Universität Erlangen-Nürnberg). Created with KI-Materialtechnologie students in mind, but useful for anyone who wants to keep their course materials synchronized automatically.
 
 ## Features
 
@@ -332,9 +332,7 @@ Found a bug? Want to add a feature? Contributions are welcome!
 3. Make your changes
 4. Submit a pull request
 
-## For KI-Materialtechnologie Students
-
-### New Semester Setup
+## New Semester Setup
 
 At the start of each semester:
 1. Log into StudOn in Firefox and enroll in your new courses
