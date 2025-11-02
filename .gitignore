@@ -1,0 +1,56 @@
+# KI-Materialtechnologie Student Repository .gitignore
+
+# ===== Claude Code / AI Assistants =====
+.claude/
+.gemini-cli/
+.cli-agent/
+
+# ===== KDE/Dolphin =====
+.directory
+
+# ===== Environment Configuration =====
+# Personal .env file (contains local paths)
+.env
+
+# ===== Personal Content (excluded from template) =====
+# Personal notes and archives
+*Notes.md
+*notes.md
+Archived/
+Archive/
+
+# Personal job applications and career materials
+HiWi_Bewerbung/
+Bewerbung/
+
+# Personal images and media files
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Specific semester PDFs (students should download current versions themselves)
+*Modulplan*.pdf
+*PO-Version*.pdf
+
+# ===== StudOn Scraper Generated Content =====
+# Downloaded course materials
+studon_downloads/
+
+# State files (contains timestamps, might be machine-specific)
+.studon_updater_state.json
+
+# ===== Python Development =====
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Virtual environments
+venv/
+.venv
+env/
+ENV/
+
+# ===== Log Files =====
+*.log
