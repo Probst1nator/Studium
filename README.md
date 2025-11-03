@@ -11,27 +11,27 @@ A handpicked list of useful links for FAU students, specifically with KI-Materia
 ### Daily Essentials
 
 **Südmensa Weekly Menu** (often changes spontaneously)
-https://www.werkswelt.de/?id=sued
+    https://www.werkswelt.de/?id=sued
 
 **Campo Timetable**
-https://www.campo.fau.de/qisserver/pages/plan/individualTimetable.xhtml?_flowId=individualTimetableSchedule-flow
+    https://www.campo.fau.de/qisserver/pages/plan/individualTimetable.xhtml?_flowId=individualTimetableSchedule-flow
 
 ### Long-Term Study Planning
 
 **Module Planner**
-https://www.campo.fau.de/qisserver/pages/startFlow.xhtml?_flowId=studyPlanner-flow
+    https://www.campo.fau.de/qisserver/pages/startFlow.xhtml?_flowId=studyPlanner-flow
 
 **Grade Overview**
-https://www.campo.fau.de/qisserver/pages/sul/examAssessment/personExamsReadonly.xhtml?_flowId=examsOverviewForPerson-flow
+    https://www.campo.fau.de/qisserver/pages/sul/examAssessment/personExamsReadonly.xhtml?_flowId=examsOverviewForPerson-flow
 
 **FAU personal data hub**
-https://www.idm.fau.de/go/profile/overview
+    https://www.idm.fau.de/go/profile/overview
 
 **Opinionated recommendation: Subscribe to some interesting FAU mailinglists**
-https://www.idm.fau.de/go/mail/subscriptions
+    https://www.idm.fau.de/go/mail/subscriptions
 
 **Opinionated recommendation: Pick some sports course (best done at the start of a semester)**
-https://www.anmeldung.sport.uni-erlangen.de/hsp/sportarten/aktueller_zeitraum_0
+    https://www.anmeldung.sport.uni-erlangen.de/hsp/sportarten/aktueller_zeitraum_0
 
 ---
 
