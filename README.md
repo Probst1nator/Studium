@@ -65,11 +65,11 @@ Quick start:
 # Install dependencies
 pip install requests beautifulsoup4 pyperclip browser-cookie3
 
-# Create a directory for your study
+# Make a directory for your study
 mkdir Studium
-# *C*hange *d*irectory into this directory
-cd ~/Studium
-# Download the files from this repository into the current directory
+# Change directory into it
+cd Studium
+# Clone the files from this git-url into the current local directory
 git clone https://github.com/Probst1nator/Studium.git .
 
 # Run setup for autonomous background startup of daily (fetch-only) sync via crontab.
