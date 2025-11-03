@@ -30,6 +30,9 @@ https://www.idm.fau.de/go/profile/overview
 **Opinionated recommendation: Subscribe to some interesting FAU mailinglists**:
 https://www.idm.fau.de/go/mail/subscriptions
 
+**Opinionated recommendation: Pick some sports course (best done at the start of a semester)**
+https://www.anmeldung.sport.uni-erlangen.de/hsp/sportarten/aktueller_zeitraum_0
+
 ---
 
 ## StudOn Auto-Downloader
