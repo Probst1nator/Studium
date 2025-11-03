@@ -58,7 +58,7 @@ User Login → Script Starts → Waits for Firefox → Syncs All Courses → Exi
 
 ### Getting Started
 
-See **[setup.md](setup.md)** for complete installation and usage instructions.
+See **[SETUP.md](SETUP.md)** for complete installation and usage instructions.
 
 Quick start:
 ```bash
