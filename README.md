@@ -67,15 +67,16 @@ pip install requests beautifulsoup4 pyperclip browser-cookie3
 
 # Create a directory for your study
 mkdir Studium
-# *Change directory* into this directory
+# *C*hange *d*irectory into this directory
 cd ~/Studium
 # Download the files from this repository into the current directory
 git clone https://github.com/Probst1nator/Studium.git .
 
 # Run setup for autonomous background startup of daily (fetch-only) sync via crontab.
-# The script will detect your platform and warn you if it's untested.
-# (Verified working on Kubuntu/Ubuntu only)
-bash setup_daily_sync.sh
+# Add executing permissions to the script
+chmod +x setup_daily_sync.sh
+# Execute it
+setup_daily_sync.sh
 ```
 
 ## Privacy & Security
