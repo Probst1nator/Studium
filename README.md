@@ -14,15 +14,15 @@ A handpicked list of useful links for FAU students, specifically with KI-Materia
 https://www.werkswelt.de/?id=sued
 
 **Campo Timetable**:
-https://www.campo.fau.de/qisserver/pages/plan/individualTimetable.xhtml?_flowId=individualTimetableSchedule-flow&_flowExecutionKey=e3s1
+https://www.campo.fau.de/qisserver/pages/plan/individualTimetable.xhtml?_flowId=individualTimetableSchedule-flow
 
 ### Long-Term Study Planning
 
 **Module Planner**:
-https://www.campo.fau.de/qisserver/pages/startFlow.xhtml?_flowId=studyPlanner-flow&_flowExecutionKey=e1s1
+https://www.campo.fau.de/qisserver/pages/startFlow.xhtml?_flowId=studyPlanner-flow
 
 **Grade Overview**:
-https://www.campo.fau.de/qisserver/pages/sul/examAssessment/personExamsReadonly.xhtml?_flowId=examsOverviewForPerson-flow&_flowExecutionKey=e2s1
+https://www.campo.fau.de/qisserver/pages/sul/examAssessment/personExamsReadonly.xhtml?_flowId=examsOverviewForPerson-flow
 
 **FAU personal data hub**:
 https://www.idm.fau.de/go/profile/overview
