@@ -64,7 +64,7 @@ If you prefer to set up manually, add this to your crontab:
 crontab -e
 
 # Add this line:
-@reboot cd /path/to/Studium && /usr/bin/python3 studon_scraper.py --daily-sync --interval 5 >> studon_sync.log 2>&1
+@reboot cd /path/to/Studium && /usr/bin/python3 studon_scraper.py --daily-sync >> studon_sync.log 2>&1
 ```
 
 **Important**: Replace `/path/to/Studium` with your actual path.
@@ -207,15 +207,6 @@ options:
 2. Try logging out and back in to refresh cookies
 3. Check if the course URL is accessible in your browser
 
-### "Could not load Firefox cookies"
-
-**Problem**: Script can't access Firefox cookies.
-
-**Solutions**:
-1. Make sure Firefox is installed and you've logged into StudOn
-2. On Linux, you might need to close Firefox first (it locks the cookie database)
-3. Try using a different browser (modify the code to use Chrome/Edge)
-
 ### Cron job not running
 
 **Problem**: Script doesn't start on login.
@@ -225,24 +216,6 @@ options:
 2. Check logs: `cat studon_sync.log`
 3. Verify the path in the cron job is correct
 4. Make sure Python 3 is at `/usr/bin/python3` (check with `which python3`)
-
-### Files are being re-downloaded
-
-**Problem**: Same files download again.
-
-**Solution**: This shouldn't happen - the script checks for existing files. If it does:
-1. Check file permissions
-2. Verify the file paths match exactly
-3. Check the logs for error messages
-
-### Script keeps running forever
-
-**Problem**: Daily sync doesn't exit.
-
-**Solutions**:
-1. Kill the process: `pkill -f "studon_scraper.py --daily-sync"`
-2. Check if Firefox is actually running: `pgrep firefox`
-3. Check the logs: `cat studon_sync.log`
 
 ## Advanced Usage
 
@@ -271,7 +244,7 @@ After=network.target
 [Service]
 Type=oneshot
 WorkingDirectory=/path/to/Studium
-ExecStart=/usr/bin/python3 /path/to/Studium/studon_scraper.py --daily-sync --interval 5
+ExecStart=/usr/bin/python3 /path/to/Studium/studon_scraper.py --daily-sync
 StandardOutput=append:/path/to/Studium/studon_sync.log
 StandardError=append:/path/to/Studium/studon_sync.log
 
