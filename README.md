@@ -94,12 +94,19 @@ Found a bug? Want to add a feature? Contributions are welcome!
 - 🌐 **Browser compatibility** (Chrome, Edge, Brave cookie support)
 - 🧪 **Testing** on different distributions
 
-To contribute:
+To contribute you have two options:
+
+**A. You know these things**
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
 4. Test on your platform and document the results
 5. Submit a pull request
+
+**B. Reach out**
+1. Talk to me in-person (if you know me)
+2. ???
+3. Profit
 
 ## License
 
