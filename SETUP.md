@@ -106,7 +106,7 @@ python studon_scraper.py --update-all
 
 **View sync logs:**
 ```bash
-tail -f studon_sync.log
+cat studon_sync.log
 ```
 
 ## File Structure
@@ -242,7 +242,7 @@ options:
 **Solutions**:
 1. Kill the process: `pkill -f "studon_scraper.py --daily-sync"`
 2. Check if Firefox is actually running: `pgrep firefox`
-3. Check the logs: `tail -f studon_sync.log`
+3. Check the logs: `cat studon_sync.log`
 
 ## Advanced Usage
 
