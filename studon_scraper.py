@@ -908,16 +908,6 @@ def download_all_files(source: str, files_to_download: List[Dict[str, str]], ses
     metadata_folder = base_path if base_path else DOWNLOAD_FOLDER
     metadata_path = os.path.join(metadata_folder, "METADATA.md")
 
-    # Load existing metadata to check for already-downloaded URLs
-    already_downloaded_urls = set()
-    existing_metadata = CourseMetadata.from_yaml_markdown(metadata_path)
-    if existing_metadata:
-        for record in existing_metadata.file_history:
-            if record.download_url:
-                already_downloaded_urls.add(record.download_url)
-        if already_downloaded_urls:
-            logger.debug(f"Found {len(already_downloaded_urls)} previously downloaded URLs in metadata")
-
     for i, file_info in enumerate(files_to_download):
         file_url: str = file_info['url']
         save_path: str = file_info['path']
@@ -926,11 +916,6 @@ def download_all_files(source: str, files_to_download: List[Dict[str, str]], ses
         logger.debug(f"   ({i+1}/{len(files_to_download)}) Checking: {expected_name}")
 
         try:
-            # Check if this URL was already downloaded (prevents duplicates even with filename variations)
-            if file_url in already_downloaded_urls:
-                logger.debug(f"   ⏭️  Skipped (URL already downloaded): {expected_name}")
-                continue
-
             # Ensure the local directory exists
             os.makedirs(save_path, exist_ok=True)
 

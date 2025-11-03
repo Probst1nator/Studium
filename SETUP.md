@@ -354,4 +354,4 @@ At the start of each semester:
 2. Download each new course once: `python studon_scraper.py "<course-url>"`
 3. From then on, the daily sync will automatically check all courses for new files
 
-**Note:** The scraper NEVER deletes old files. It only downloads new files that don't exist yet. Your old course materials from previous semesters stay untouched.
+**Note:** The scraper NEVER deletes old files. It only downloads files that don't already exist locally at the target filepath. Your old course materials from previous semesters stay untouched. (Warning: This means files are *never updated* once downloaded — even if modified on StudOn. To redownload a file, rename, move or delete the old one before running the scraper again.)
