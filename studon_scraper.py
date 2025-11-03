@@ -4,7 +4,6 @@ import sys
 import shutil
 import subprocess
 import time
-import json
 import requests
 import pyperclip
 import browser_cookie3
@@ -300,32 +299,15 @@ class CourseMetadata:
 
 @dataclass
 class UpdateState:
-    """State tracking for auto-updater."""
+    """State tracking for auto-updater. State is persisted via RECENT_UPDATES.md."""
     last_update: Optional[datetime]
     last_success: bool = False
-
-    def to_dict(self) -> dict:
-        """For JSON serialization."""
-        return {
-            'last_update': self.last_update.isoformat() if self.last_update else None,
-            'last_success': self.last_success
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'UpdateState':
-        """Load from JSON."""
-        last_update_str = data.get('last_update')
-        last_update = datetime.fromisoformat(last_update_str) if last_update_str else None
-        return cls(
-            last_update=last_update,
-            last_success=data.get('last_success', False)
-        )
 
 # --- CONFIGURATION ---
 DOWNLOAD_FOLDER = "studon_downloads"
 STUDON_DOMAIN = 'studon.fau.de'
-CONFIRMATION_THRESHOLD = 50 # Ask for confirmation if more than this many files are found
-STATE_FILE = os.path.join(DOWNLOAD_FOLDER, ".studon_updater_state.json")
+CONFIRMATION_THRESHOLD = int(os.getenv("CONFIRMATION_THRESHOLD", "50"))  # Ask for confirmation if more than this many files are found
+RECENT_UPDATES_FILE = os.path.join(DOWNLOAD_FOLDER, "RECENT_UPDATES.md")
 
 # --- PLATFORM DETECTION ---
 
@@ -1231,25 +1213,24 @@ def can_access_studon() -> bool:
         return False
 
 def load_state() -> UpdateState:
-    """Load the last update timestamp from state file."""
-    if os.path.exists(STATE_FILE):
+    """Load the last update timestamp from RECENT_UPDATES.md."""
+    recent_updates_path = os.path.join(DOWNLOAD_FOLDER, "RECENT_UPDATES.md")
+    if os.path.exists(recent_updates_path):
         try:
-            with open(STATE_FILE, 'r') as f:
-                data = json.load(f)
-                return UpdateState.from_dict(data)
+            with open(recent_updates_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # Look for "Last updated: YYYY-MM-DD HH:MM:SS"
+                    if line.startswith('Last updated:'):
+                        timestamp_str = line.replace('Last updated:', '').strip()
+                        try:
+                            last_update = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                            return UpdateState(last_update=last_update, last_success=True)
+                        except ValueError:
+                            logger.warning(f"Could not parse timestamp from RECENT_UPDATES.md: {timestamp_str}")
+                            break
         except Exception as e:
-            logger.warning(f"Could not load state file: {e}")
+            logger.warning(f"Could not read RECENT_UPDATES.md: {e}")
     return UpdateState(last_update=None, last_success=False)
-
-def save_state(state: UpdateState) -> None:
-    """Save the last update timestamp to state file."""
-    try:
-        # Ensure the download folder exists
-        os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state.to_dict(), f, indent=2)
-    except Exception as e:
-        logger.warning(f"Could not save state file: {e}")
 
 def was_updated_today(state: UpdateState) -> bool:
     """Check if an update was already performed today."""
@@ -1329,7 +1310,7 @@ def run_daily_sync(check_interval_seconds: int = 300) -> None:
 
     logger.info("Daily sync mode started")
     logger.info(f"  Will check for StudOn login every {check_interval_seconds // 60} minutes")
-    logger.info(f"  Will exit after successful daily sync")
+    logger.info("  Will exit after successful daily sync")
 
     while True:
         try:
@@ -1341,9 +1322,6 @@ def run_daily_sync(check_interval_seconds: int = 300) -> None:
             logger.info("StudOn access verified, starting sync...")
 
             if update_all_courses():
-                state.last_update = datetime.now()
-                state.last_success = True
-                save_state(state)
                 logger.info("Daily sync completed successfully!")
                 logger.info("Exiting.")
                 return

@@ -113,7 +113,7 @@ tail -f studon_sync.log
 
 ```
 Studium/
-├── studon_scraper.py              # Main scraper script (with auto-update modes)
+├── studon_scraper.py              # Main scraper script
 ├── setup_daily_sync.sh            # Setup script for cron
 ├── studon_sync.log                # Sync logs
 ├── studon_downloads/              # Downloaded course materials
@@ -125,7 +125,8 @@ Studium/
 │   └── Course Name 2/
 │       ├── METADATA.md
 │       └── ...
-└── README.md                      # This file
+├── README.md                      # General FAU student resources
+└── SETUP.md                       # Setup guide (this file)
 ```
 
 ## Multi-Device Setup
@@ -140,49 +141,7 @@ If you store this folder in a cloud sync service (Syncthing, OneDrive, Dropbox, 
 
 **Note**: The `studon_downloads/.studon_updater_state.json` file syncs across devices, so if you sync on one device, other devices will know about it and won't re-download the same day.
 
-## Configuration
-
-### Customize Check Interval
-
-Edit the cron job or run with custom interval:
-
-```bash
-# Check for Firefox every 10 minutes instead of 5
-python studon_scraper.py --daily-sync --interval 10
-```
-
-### Change Download Location
-
-The second argument specifies the **base folder** where course subfolders will be created:
-
-```bash
-# Default: downloads to studon_downloads/Course Name/
-python studon_scraper.py "https://studon.fau.de/..."
-
-# Custom base folder: downloads to /my/courses/Course Name/
-python studon_scraper.py "https://studon.fau.de/..." "/my/courses"
-
-# Example with actual paths:
-python studon_scraper.py "https://studon.fau.de/..." "/home/user/Studium"
-# → Creates: /home/user/Studium/Course Name/
-#            /home/user/Studium/Course Name/METADATA.md
-#            /home/user/Studium/Course Name/Lecture 1/...
-```
-
-### Modify Settings
-
-Edit `studon_scraper.py`:
-
-```python
-DOWNLOAD_FOLDER = "studon_downloads"  # Where to save files
-CONFIRMATION_THRESHOLD = 50           # Ask before downloading this many files
-STATE_FILE = os.path.join(DOWNLOAD_FOLDER, ".studon_updater_state.json")  # State tracking
-```
-
 ## Command Reference
-
-### studon_scraper.py
-
 #### Manual Download Modes
 
 ```bash
@@ -193,6 +152,9 @@ python studon_scraper.py
 # Update all existing courses (only fetches new files, never overwrites)
 python studon_scraper.py --update-all
 # → Updates courses in: studon_downloads/
+
+# Display help page (perfect for manual customization)
+python studon_scraper.py -h
 ```
 
 #### Help Page
@@ -201,7 +163,7 @@ Run `python studon_scraper.py -h` to see all available options:
 
 ```
 usage: studon_scraper.py [-h] [--update-all] [--daily-sync]
-                         [--interval INTERVAL]
+                         [--interval INTERVAL] [--debug]
                          [url] [download_path]
 
 StudOn Recursive File Downloader & Auto-Updater
@@ -219,32 +181,8 @@ options:
   --interval INTERVAL, -i INTERVAL
                         Check interval in minutes for --daily-sync (default:
                         5)
-```
-
-#### Automated Daily Sync
-
-Set up automatic syncing that runs once per day when you log in.
-
-```bash
-# Setup with the provided script (recommended)
-bash setup_daily_sync.sh
-
-# Or add to crontab manually:
-crontab -e
-# Add this line:
-@reboot cd /path/to/Studium && python3 studon_scraper.py --daily-sync --interval 5 >> studon_sync.log 2>&1
-```
-
-**How it works:**
-- Starts when you log in to your computer
-- Checks for Firefox every 5 minutes (adjustable with `--interval`)
-- When Firefox is running, syncs all courses once
-- Exits and won't run again until tomorrow (even if you reboot)
-
-**Manual sync anytime:**
-If you need to sync immediately, just run:
-```bash
-python3 studon_scraper.py --update-all
+  --debug, -d           Enable debug mode (saves HTML and shows detailed
+                        logging)
 ```
 
 ## Troubleshooting
