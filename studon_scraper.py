@@ -2,25 +2,374 @@ import os
 import re
 import sys
 import shutil
+import subprocess
+import time
+import json
 import requests
 import pyperclip
 import browser_cookie3
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
-import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import zipfile
 import tarfile
 import argparse
+from dataclasses import dataclass
+from tabulate import tabulate
+from pathlib import Path
+import logging
+import yaml
+import platform as platform_module
+
 try:
     import py7zr
 except ImportError:
     py7zr = None
 
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('studon_sync.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# --- CUSTOM EXCEPTIONS (BEGINNER-FRIENDLY) ---
+class StudOnError(Exception):
+    """Base error with helpful suggestions for beginners."""
+    def __init__(self, message: str, suggestion: str = ""):
+        self.suggestion = suggestion
+        full_msg = f"❌ {message}"
+        if suggestion:
+            full_msg += f"\n💡 Suggestion: {suggestion}"
+        super().__init__(full_msg)
+
+class FirefoxCookieError(StudOnError):
+    """Cannot load Firefox cookies."""
+    def __init__(self, original_error: Exception):
+        super().__init__(
+            "Could not load Firefox cookies",
+            "Make sure Firefox is installed and you're logged into StudOn. Try closing Firefox first."
+        )
+        self.original_error = original_error
+
+class NetworkError(StudOnError):
+    """Network request failed."""
+    def __init__(self, url: str, original_error: Exception):
+        super().__init__(
+            f"Network request failed for: {url}",
+            "Check your internet connection and verify the URL is correct."
+        )
+        self.original_error = original_error
+
+class FileSystemError(StudOnError):
+    """File operation failed."""
+    def __init__(self, operation: str, path: str, original_error: Exception):
+        super().__init__(
+            f"File {operation} failed for: {path}",
+            f"Check that you have write permissions for this location."
+        )
+        self.original_error = original_error
+
+# --- DATA MODELS (TYPED OBJECTS) ---
+@dataclass
+class FileRecord:
+    """A downloaded file with metadata."""
+    filepath: Path
+    timestamp: datetime
+    course_name: str
+    size_bytes: int
+    download_url: Optional[str] = None  # Track source URL to prevent duplicate downloads
+
+    @property
+    def timestamp_formatted(self) -> str:
+        """Format timestamp for display/markdown."""
+        return self.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+
+    @property
+    def size_formatted(self) -> str:
+        """Human-readable size using existing format_file_size function."""
+        return format_file_size(self.size_bytes)
+
+    def get_relative_path(self, base_path: Path) -> str:
+        """Get path relative to base."""
+        try:
+            return str(self.filepath.relative_to(base_path))
+        except ValueError:
+            return str(self.filepath)
+
+    def to_dict(self, base_path: Optional[Path] = None) -> dict:
+        """Convert to dictionary for YAML serialization."""
+        return {
+            'filepath': self.get_relative_path(base_path) if base_path else str(self.filepath),
+            'timestamp': self.timestamp.isoformat(),
+            'course_name': self.course_name,
+            'size_bytes': self.size_bytes,
+            'download_url': self.download_url
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, base_path: Optional[Path] = None) -> 'FileRecord':
+        """Load from dictionary (YAML deserialization)."""
+        filepath_str = data.get('filepath', '')
+        if base_path and not Path(filepath_str).is_absolute():
+            filepath = base_path / filepath_str
+        else:
+            filepath = Path(filepath_str)
+
+        timestamp_str = data.get('timestamp', '')
+        try:
+            timestamp = datetime.fromisoformat(timestamp_str)
+        except (ValueError, TypeError):
+            timestamp = datetime.now()
+
+        return cls(
+            filepath=filepath,
+            timestamp=timestamp,
+            course_name=data.get('course_name', 'Unknown'),
+            size_bytes=data.get('size_bytes', 0),
+            download_url=data.get('download_url')  # Optional, for backward compatibility with old metadata
+        )
+
+@dataclass
+class CourseMetadata:
+    """Course info with file history."""
+    course_title: str
+    source_url: str
+    last_fetched: datetime
+    file_history: List[FileRecord]
+
+    @property
+    def last_fetched_formatted(self) -> str:
+        """Format last_fetched for display."""
+        return self.last_fetched.strftime('%Y-%m-%d %H:%M:%S')
+
+    def to_markdown(self, course_folder: Path) -> str:
+        """Generate markdown representation using tabulate."""
+        lines = [
+            f"Course: {self.course_title}",
+            f"Source: {self.source_url}",
+            f"Last fetched: {self.last_fetched_formatted}",
+        ]
+
+        if self.file_history:
+            lines.append("\n## File History\n")
+            table_data = [
+                [
+                    record.timestamp_formatted,
+                    record.get_relative_path(course_folder),
+                    record.size_formatted
+                ]
+                for record in self.file_history
+            ]
+            table = tabulate(
+                table_data,
+                headers=["Date/Time", "File Path", "Size"],
+                tablefmt="pipe"
+            )
+            lines.append(table)
+
+        return "\n".join(lines)
+
+    def to_yaml_markdown(self, course_folder: Path) -> str:
+        """Generate markdown with YAML frontmatter for programmatic access."""
+        # Prepare YAML frontmatter data
+        yaml_data = {
+            'course_title': self.course_title,
+            'source_url': self.source_url,
+            'last_fetched': self.last_fetched.isoformat(),
+            'file_history': [record.to_dict(course_folder) for record in self.file_history]
+        }
+
+        # Generate YAML frontmatter
+        yaml_str = yaml.dump(yaml_data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        # Generate markdown body (for human readability)
+        markdown_body = self.to_markdown(course_folder)
+
+        # Combine frontmatter and body
+        return f"---\n{yaml_str}---\n\n{markdown_body}"
+
+    @classmethod
+    def from_yaml_markdown(cls, path: str) -> Optional['CourseMetadata']:
+        """Load CourseMetadata from METADATA.md file with YAML frontmatter or fallback to markdown parsing.
+
+        Args:
+            path: Path to the METADATA.md file
+
+        Returns:
+            CourseMetadata object or None if file doesn't exist
+        """
+        if not os.path.exists(path):
+            return None
+
+        course_folder = Path(path).parent
+
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Try to parse YAML frontmatter
+            if content.startswith('---'):
+                # Split by frontmatter delimiters
+                parts = content.split('---', 2)
+                if len(parts) >= 3:
+                    yaml_str = parts[1]
+                    try:
+                        yaml_data = yaml.safe_load(yaml_str)
+
+                        # Parse file history from YAML
+                        file_history = []
+                        for record_data in yaml_data.get('file_history', []):
+                            file_history.append(FileRecord.from_dict(record_data, course_folder))
+
+                        # Parse last_fetched
+                        last_fetched_str = yaml_data.get('last_fetched', '')
+                        try:
+                            last_fetched = datetime.fromisoformat(last_fetched_str)
+                        except (ValueError, TypeError):
+                            last_fetched = datetime.now()
+
+                        return cls(
+                            course_title=yaml_data.get('course_title', 'Unknown Course'),
+                            source_url=yaml_data.get('source_url', ''),
+                            last_fetched=last_fetched,
+                            file_history=file_history
+                        )
+                    except yaml.YAMLError as e:
+                        logger.warning(f"Could not parse YAML frontmatter: {e}, falling back to markdown parsing")
+
+            # Fallback: Parse old markdown format
+            logger.debug("No YAML frontmatter found, parsing old markdown format")
+            lines = content.split('\n')
+
+            # Extract metadata from old format
+            course_title = 'Unknown Course'
+            source_url = ''
+            last_fetched = datetime.now()
+            file_history = []
+
+            # Parse header lines
+            for line in lines:
+                if line.startswith('Course:'):
+                    course_title = line.replace('Course:', '').strip()
+                elif line.startswith('Source:'):
+                    source_url = line.replace('Source:', '').strip()
+                elif line.startswith('Last fetched:'):
+                    try:
+                        date_str = line.replace('Last fetched:', '').strip()
+                        last_fetched = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+                    except ValueError:
+                        pass
+
+            # Parse file history table (old format)
+            in_history_section = False
+            for line in lines:
+                if line.strip() == "## File History":
+                    in_history_section = True
+                    continue
+                if in_history_section and line.startswith('|') and 'Date/Time' not in line and '---' not in line:
+                    parts = [p.strip() for p in line.split('|') if p.strip()]
+                    if len(parts) >= 3:
+                        try:
+                            timestamp_dt = datetime.strptime(parts[0], '%Y-%m-%d %H:%M:%S')
+                        except ValueError:
+                            timestamp_dt = datetime.now()
+
+                        file_history.append(FileRecord(
+                            filepath=course_folder / parts[1],
+                            timestamp=timestamp_dt,
+                            course_name=course_title,
+                            size_bytes=0  # Size not available in old format
+                        ))
+
+            return cls(
+                course_title=course_title,
+                source_url=source_url,
+                last_fetched=last_fetched,
+                file_history=file_history
+            )
+
+        except Exception as e:
+            logger.error(f"Could not read metadata file {path}: {e}")
+            return None
+
+@dataclass
+class UpdateState:
+    """State tracking for auto-updater."""
+    last_update: Optional[datetime]
+    last_success: bool = False
+
+    def to_dict(self) -> dict:
+        """For JSON serialization."""
+        return {
+            'last_update': self.last_update.isoformat() if self.last_update else None,
+            'last_success': self.last_success
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'UpdateState':
+        """Load from JSON."""
+        last_update_str = data.get('last_update')
+        last_update = datetime.fromisoformat(last_update_str) if last_update_str else None
+        return cls(
+            last_update=last_update,
+            last_success=data.get('last_success', False)
+        )
+
 # --- CONFIGURATION ---
 DOWNLOAD_FOLDER = "studon_downloads"
 STUDON_DOMAIN = 'studon.fau.de'
 CONFIRMATION_THRESHOLD = 50 # Ask for confirmation if more than this many files are found
+STATE_FILE = os.path.join(DOWNLOAD_FOLDER, ".studon_updater_state.json")
+
+# --- PLATFORM DETECTION ---
+
+def check_platform_compatibility() -> None:
+    """
+    Checks if running on tested platform and logs warnings if not.
+    Only tested on Kubuntu/Ubuntu Linux.
+    """
+    system = platform_module.system()
+    is_tested = False
+
+    if system == "Linux":
+        # Try to detect if it's Ubuntu/Kubuntu
+        try:
+            with open('/etc/os-release', 'r') as f:
+                os_release = f.read()
+                if 'Ubuntu' in os_release or 'ubuntu' in os_release.lower():
+                    is_tested = True
+        except (FileNotFoundError, PermissionError):
+            pass
+
+    if not is_tested:
+        distro_info = f"{system}"
+        try:
+            distro_info = f"{system} {platform_module.release()}"
+        except:
+            pass
+
+        logger.warning("=" * 70)
+        logger.warning("⚠️  PLATFORM WARNING ⚠️")
+        logger.warning("=" * 70)
+        logger.warning(f"This script has only been tested on Kubuntu/Ubuntu Linux.")
+        logger.warning(f"You are running on: {distro_info}")
+        logger.warning("")
+        logger.warning("The script may encounter issues with:")
+        logger.warning("  • Firefox cookie access")
+        logger.warning("  • Process detection")
+        logger.warning("  • File paths and permissions")
+        logger.warning("")
+        logger.warning("If you experience problems, please:")
+        logger.warning("  • Try running manually: python3 studon_scraper.py --update-all")
+        logger.warning("  • Check GitHub issues for platform-specific solutions")
+        logger.warning("  • Consider contributing platform support!")
+        logger.warning("=" * 70)
 
 # --- HELPER FUNCTIONS ---
 
@@ -96,7 +445,7 @@ def clean_filename(name: str) -> str:
     """Removes characters that are illegal in file paths."""
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
-def extract_course_title(page_url: str, session: requests.Session) -> Optional[str]:
+def extract_course_title(page_url: str, session: requests.Session, debug: bool = False) -> Optional[str]:
     """
     Extracts the course title from a StudOn page.
     Tries multiple common StudOn HTML patterns to find the title.
@@ -106,32 +455,72 @@ def extract_course_title(page_url: str, session: requests.Session) -> Optional[s
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Try multiple selectors commonly used for course titles in StudOn
+        # Save HTML for debugging if requested
+        if debug:
+            debug_file = os.path.join(DOWNLOAD_FOLDER, "debug_page.html")
+            os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write(response.text)
+            logger.debug(f"Saved debug HTML to: {debug_file}")
+
+        # Strategy 1: Try to find h1 tags (with or without classes)
+        h1_tags = soup.find_all('h1')
+        if debug:
+            logger.debug(f"Found {len(h1_tags)} h1 tags")
+
+        for h1 in h1_tags:
+            title = h1.get_text(strip=True)
+            # Skip navigation/generic headers
+            if title and title.lower() not in ['studon', 'home', 'startseite', 'navigation']:
+                if debug:
+                    logger.debug(f"Found h1 title: {title}")
+                return clean_filename(title)
+
+        # Strategy 2: Look for ILIAS-specific title elements
         title_selectors = [
-            ('h1', {'class': re.compile(r'.*')}),  # Any h1
             ('div', {'class': re.compile(r'il.*Title|PageTitle', re.IGNORECASE)}),
             ('span', {'class': re.compile(r'il.*Title', re.IGNORECASE)}),
+            ('h2', {}),  # Sometimes course title is in h2
         ]
 
         for tag_name, attrs in title_selectors:
-            element = soup.find(tag_name, attrs)
-            if element:
+            elements = soup.find_all(tag_name, attrs) if attrs else soup.find_all(tag_name)
+            for element in elements:
                 title = element.get_text(strip=True)
-                if title:
+                # Skip short or generic titles
+                if title and len(title) > 3 and title.lower() not in ['studon', 'home', 'startseite']:
+                    if debug:
+                        logger.debug(f"Found {tag_name} title: {title}")
                     return clean_filename(title)
 
-        # Fallback: try to get the page title from <title> tag
+        # Strategy 3: Try meta tags
+        meta_title = soup.find('meta', attrs={'property': 'og:title'})
+        if meta_title and meta_title.get('content'):
+            title = meta_title['content'].strip()
+            if debug:
+                logger.debug(f"Found meta og:title: {title}")
+            return clean_filename(title)
+
+        # Strategy 4: Fallback to page title from <title> tag
         page_title = soup.find('title')
         if page_title:
             title_text = page_title.get_text(strip=True)
-            # Remove common prefixes like "StudOn - "
-            title_text = re.sub(r'^[^-]+ - ', '', title_text).strip()
-            if title_text:
+            # Remove common prefixes like "StudOn - " or "ILIAS - "
+            title_text = re.sub(r'^(StudOn|ILIAS)\s*[-:]\s*', '', title_text, flags=re.IGNORECASE).strip()
+            if title_text and len(title_text) > 3:
+                if debug:
+                    logger.debug(f"Using title tag: {title_text}")
                 return clean_filename(title_text)
+
+        if debug:
+            logger.debug("No title found with any strategy")
 
         return None
     except Exception as e:
-        print(f"   ⚠️ Could not extract course title: {e}")
+        logger.error(f"Could not extract course title: {e}")
+        if debug:
+            import traceback
+            logger.debug(traceback.format_exc())
         return None
 
 def clear_download_folder(folder_path: str) -> None:
@@ -166,6 +555,12 @@ def extract_archive(archive_path: str) -> bool:
 
         # Create extraction directory with archive name
         extract_dir = os.path.join(parent_dir, folder_name)
+
+        # Check if extraction directory already has content (skip to avoid overwriting)
+        if os.path.exists(extract_dir) and os.listdir(extract_dir):
+            logger.debug(f"      ⏭️  Skipped extraction (folder already exists): {filename}")
+            return False  # Not an error, just already extracted
+
         os.makedirs(extract_dir, exist_ok=True)
 
         if archive_path.endswith('.zip'):
@@ -220,20 +615,21 @@ def format_file_size(size_bytes: int) -> str:
         size_bytes /= 1024.0
     return f"{size_bytes:.1f} TB"
 
-def update_recent_files_log(downloaded_files_info: List[Dict[str, str]], base_download_path: str) -> None:
+def update_recent_files_log(downloaded_files_info: List[FileRecord], base_download_path: str) -> None:
     """
     Updates the RECENT_UPDATES.md file with newly downloaded files.
 
     Args:
-        downloaded_files_info: List of dicts with keys: filepath, timestamp, course, size_bytes
+        downloaded_files_info: List of FileRecord objects
         base_download_path: Base path for downloads (to create relative paths)
     """
     if not downloaded_files_info:
         return
 
     log_file = os.path.join(base_download_path, "RECENT_UPDATES.md")
+    base_path = Path(base_download_path)
 
-    # Read existing entries if file exists
+    # Read existing entries (keep as strings for backward compatibility)
     existing_entries = []
     if os.path.exists(log_file):
         try:
@@ -244,33 +640,31 @@ def update_recent_files_log(downloaded_files_info: List[Dict[str, str]], base_do
                     if line.startswith('|') and 'Date/Time' not in line and '---' not in line:
                         existing_entries.append(line.strip())
         except Exception as e:
-            print(f"   ⚠️ Could not read existing log: {e}")
+            logger.warning(f"Could not read existing log: {e}")
 
-    # Format new entries
+    # Format new entries as table data for tabulate
+    new_table_data = []
+    for record in downloaded_files_info:
+        rel_path = record.get_relative_path(base_path)
+        filename = record.filepath.name
+        new_table_data.append([
+            record.timestamp_formatted,
+            record.course_name,
+            filename,
+            rel_path,
+            record.size_formatted
+        ])
+
+    # Convert new entries to markdown table format strings (for sorting with old entries)
     new_entries = []
-    for file_info in downloaded_files_info:
-        filepath = file_info['filepath']
-        timestamp = file_info['timestamp']
-        course = file_info['course']
-        size_bytes = file_info['size_bytes']
-
-        # Get relative path from base_download_path
-        try:
-            rel_path = os.path.relpath(filepath, base_download_path)
-        except ValueError:
-            rel_path = filepath  # Fallback if paths are on different drives
-
-        filename = os.path.basename(filepath)
-        size_str = format_file_size(size_bytes)
-
-        # Format: | Date/Time | Course | Filename | Relative Path | Size |
-        entry = f"| {timestamp} | {course} | {filename} | {rel_path} | {size_str} |"
+    for row in new_table_data:
+        entry = f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} |"
         new_entries.append(entry)
 
     # Combine all entries (new + existing)
     all_entries = new_entries + existing_entries
 
-    # Sort by timestamp (newest first) - extract timestamp from each line
+    # Sort by timestamp (newest first)
     def get_timestamp(entry_line: str) -> str:
         parts = entry_line.split('|')
         if len(parts) >= 2:
@@ -283,15 +677,112 @@ def update_recent_files_log(downloaded_files_info: List[Dict[str, str]], base_do
     try:
         with open(log_file, 'w', encoding='utf-8') as f:
             f.write("# StudOn Recent Updates\n\n")
-            f.write(f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write("| Date/Time | Course | Filename | Relative Path | Size |\n")
-            f.write("|-----------|--------|----------|---------------|------|\n")
+            f.write(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            # Use tabulate for clean header/separator
+            table_header = tabulate(
+                [],
+                headers=["Date/Time", "Course", "Filename", "Relative Path", "Size"],
+                tablefmt="pipe"
+            )
+            # Write just the header lines
+            f.write(table_header + "\n")
+            # Write all entries
             for entry in all_entries:
                 f.write(entry + "\n")
 
-        print(f"\n📝 Updated recent files log: {log_file}")
+        logger.debug(f"Updated recent files log: {log_file}")
     except Exception as e:
-        print(f"   ⚠️ Could not write log file: {e}")
+        logger.error(f"Could not write log file: {e}")
+
+def create_course_link_file(course_folder: Path, course_title: str, source_url: str) -> None:
+    """
+    Creates an HTML redirect file to open the course in browser.
+    Works universally across all platforms and browsers.
+
+    Args:
+        course_folder: Path to the course folder
+        course_title: Title of the course (used only for display in HTML)
+        source_url: URL of the StudOn course
+    """
+    try:
+        # Always use "Link to StudOn" as filename for consistency
+        link_filename = "Link to StudOn.html"
+        link_path = course_folder / link_filename
+
+        # Create HTML redirect file with meta-refresh (instant redirect)
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="0; url={source_url}">
+    <title>Redirecting to StudOn - {course_title}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; }}
+        a {{ color: #0066cc; text-decoration: none; }}
+    </style>
+</head>
+<body>
+    <h2>Redirecting to StudOn...</h2>
+    <p>Course: {course_title}</p>
+    <p>If you are not redirected automatically, <a href="{source_url}">click here</a>.</p>
+</body>
+</html>
+"""
+
+        with open(link_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+
+        logger.debug(f"Created course link file: {link_path}")
+    except Exception as e:
+        logger.warning(f"Could not create course link file: {e}")
+
+def update_course_metadata(metadata_path: str, course_title: Optional[str], source_url: str, downloaded_files_info: List[FileRecord]) -> None:
+    """
+    Updates a course's METADATA.md file with file history using YAML frontmatter format.
+
+    Args:
+        metadata_path: Path to the course's METADATA.md file
+        course_title: Title of the course (can be None)
+        source_url: Source URL of the course
+        downloaded_files_info: List of FileRecord objects
+    """
+    course_folder = Path(metadata_path).parent
+
+    # Load existing metadata using the new from_yaml_markdown method
+    # This handles both YAML frontmatter and old markdown formats
+    existing_metadata = CourseMetadata.from_yaml_markdown(metadata_path)
+
+    existing_history: List[FileRecord] = []
+    if existing_metadata:
+        existing_history = existing_metadata.file_history
+        # Use existing course title and source URL if not provided
+        if not course_title:
+            course_title = existing_metadata.course_title
+        if not source_url:
+            source_url = existing_metadata.source_url
+
+    # Combine new and existing file history
+    all_history = downloaded_files_info + existing_history
+
+    # Sort by timestamp (newest first)
+    all_history.sort(key=lambda r: r.timestamp, reverse=True)
+
+    # Create CourseMetadata object and write to YAML markdown format
+    metadata = CourseMetadata(
+        course_title=course_title or 'Unknown Course',
+        source_url=source_url,
+        last_fetched=datetime.now(),
+        file_history=all_history
+    )
+
+    try:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            f.write(metadata.to_yaml_markdown(course_folder))
+    except Exception as e:
+        logger.error(f"Could not write metadata file: {e}")
+
+    # Create clickable link file for easy browser access
+    create_course_link_file(course_folder, course_title or 'Unknown Course', source_url)
 
 # --- CORE LOGIC ---
 
@@ -407,29 +898,39 @@ def download_all_files(source: str, files_to_download: List[Dict[str, str]], ses
     if not files_to_download:
         return 0, []
 
-    print("-" * 50)
-    print(f"🚀 Starting download of {len(files_to_download)} files...")
+    logger.info("-" * 50)
+    logger.info(f"🚀 Starting download of {len(files_to_download)} files...")
     download_count: int = 0
     downloaded_files: List[str] = []
-    downloaded_files_info: List[Dict] = []  # For logging
+    downloaded_files_info: List[FileRecord] = []  # For logging
 
     # Use provided base_path or fall back to DOWNLOAD_FOLDER
     metadata_folder = base_path if base_path else DOWNLOAD_FOLDER
+    metadata_path = os.path.join(metadata_folder, "METADATA.md")
 
-    with open(os.path.join(metadata_folder, "METADATA.md"), 'w') as f:
-        meta_info = f"""Course: {course_title or 'Unknown Course'}
-Source: {source}
-Last fetched: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
-        f.write(meta_info)
-    
+    # Load existing metadata to check for already-downloaded URLs
+    already_downloaded_urls = set()
+    existing_metadata = CourseMetadata.from_yaml_markdown(metadata_path)
+    if existing_metadata:
+        for record in existing_metadata.file_history:
+            if record.download_url:
+                already_downloaded_urls.add(record.download_url)
+        if already_downloaded_urls:
+            logger.debug(f"Found {len(already_downloaded_urls)} previously downloaded URLs in metadata")
+
     for i, file_info in enumerate(files_to_download):
         file_url: str = file_info['url']
         save_path: str = file_info['path']
         expected_name: str = file_info.get('name', 'unknown_file')
 
-        print(f"   ({i+1}/{len(files_to_download)}) Checking: {expected_name}")
+        logger.debug(f"   ({i+1}/{len(files_to_download)}) Checking: {expected_name}")
 
         try:
+            # Check if this URL was already downloaded (prevents duplicates even with filename variations)
+            if file_url in already_downloaded_urls:
+                logger.debug(f"   ⏭️  Skipped (URL already downloaded): {expected_name}")
+                continue
+
             # Ensure the local directory exists
             os.makedirs(save_path, exist_ok=True)
 
@@ -448,11 +949,11 @@ Last fetched: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
                     break
 
             if file_exists:
-                print(f"   ⏭️  Skipped (already exists): {existing_path}")
+                logger.debug(f"   ⏭️  Skipped (already exists): {existing_path}")
                 continue
 
             # File doesn't exist, proceed with download
-            print(f"      Downloading from: {file_url}")
+            logger.info(f"      Downloading: {expected_name}")
             file_response = session.get(file_url, stream=True)
             file_response.raise_for_status()
 
@@ -476,35 +977,93 @@ Last fetched: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
                 for chunk in file_response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            print(f"   ✅ Successfully saved to: {filepath}")
+            logger.info(f"   ✅ Downloaded: {filename}")
             download_count += 1
             downloaded_files.append(filepath)
 
             # Collect metadata for logging
             try:
                 file_size = os.path.getsize(filepath)
-                downloaded_files_info.append({
-                    'filepath': filepath,
-                    'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'course': file_info.get('course_title', course_title or 'Unknown Course'),
-                    'size_bytes': file_size
-                })
-            except Exception:
-                pass  # If we can't get size, just skip logging this file
+                downloaded_files_info.append(FileRecord(
+                    filepath=Path(filepath),
+                    timestamp=datetime.now(),
+                    course_name=file_info.get('course_title', course_title or 'Unknown Course'),
+                    size_bytes=file_size,
+                    download_url=file_url  # Track URL to prevent duplicate downloads
+                ))
+            except Exception as e:
+                logger.warning(f"Could not log file metadata: {e}")
         except requests.exceptions.RequestException as e:
-            print(f"   ❌ Error downloading {file_url}: {e}")
+            logger.error(f"   ❌ Error downloading {expected_name}: {e}")
         except OSError as e:
-            print(f"   ❌ File system error saving to {save_path}: {e}")
+            logger.error(f"   ❌ File system error for {save_path}: {e}")
 
-    # Update the recent files log if any files were downloaded
+    # Update the recent files log and course metadata
     if downloaded_files_info:
         update_recent_files_log(downloaded_files_info, DOWNLOAD_FOLDER)
+        update_course_metadata(metadata_path, course_title, source, downloaded_files_info)
+    else:
+        # Even if no new files, update the metadata with last fetched time
+        update_course_metadata(metadata_path, course_title, source, [])
 
     return download_count, downloaded_files
 
 # --- MAIN EXECUTION ---
 
-def process_single_url(start_url: str, session: requests.Session, base_download_path: str = None, create_course_subfolder: bool = True) -> Tuple[int, int, List[str]]:
+def is_access_denied_title(course_title: Optional[str]) -> bool:
+    """
+    Checks if the course title indicates access is denied (expired login, no permissions, etc.).
+
+    Args:
+        course_title: The extracted course title
+
+    Returns:
+        True if the title appears to be an access-denied placeholder, False otherwise
+    """
+    if not course_title:
+        return False
+
+    # Patterns that indicate access issues (case-insensitive)
+    access_denied_patterns = [
+        'kein zugriffsrecht',  # German: No access right
+        'zugriff verweigert',  # German: Access denied
+        'no access',
+        'access denied',
+        'permission denied',
+        'nicht berechtigt',  # German: Not authorized
+        'anmeldung erforderlich',  # German: Login required
+        'login required',
+        'dokument',  # Sometimes shows as "Dokument X" when not logged in
+        'unknown course',  # Our own placeholder
+    ]
+
+    title_lower = course_title.lower().strip()
+
+    for pattern in access_denied_patterns:
+        if pattern in title_lower:
+            return True
+
+    return False
+
+def show_access_denied_warning(detected_title: str, start_url: str) -> None:
+    """Display a helpful warning when access is denied."""
+    print("\n" + "="*70)
+    print("⚠️  ACCESS DENIED - Login Required")
+    print("="*70)
+    print(f"\n📌 Placeholder title detected: '{detected_title}'")
+    print("\nThis indicates your Firefox login session has expired or you don't")
+    print("have permission to access this course.")
+    print("\n🔧 HOW TO FIX:")
+    print("   1. Open Firefox")
+    print("   2. Click on this URL to log in:")
+    print(f"      {start_url}")
+    print("   3. Log in with your StudOn credentials")
+    print("   4. After successful login, run this script again")
+    print("\n💡 TIP: Your login cookies will be automatically refreshed once you")
+    print("        log in via Firefox. No need to restart Firefox.")
+    print("="*70 + "\n")
+
+def process_single_url(start_url: str, session: requests.Session, base_download_path: str = None, create_course_subfolder: bool = True, debug: bool = False) -> Tuple[int, int, List[str]]:
     """
     Processes a single StudOn URL: discovers files, downloads new ones, and extracts archives.
 
@@ -513,17 +1072,52 @@ def process_single_url(start_url: str, session: requests.Session, base_download_
         session: The requests session with cookies
         base_download_path: Base path for downloads (defaults to DOWNLOAD_FOLDER)
         create_course_subfolder: If True, creates a subfolder named after the course title
+        debug: If True, enables debug output and saves HTML for troubleshooting
 
     Returns:
         Tuple of (downloaded_count, extracted_count, list_of_downloaded_filepaths)
     """
     # --- Extract Course Title ---
     print("\n--- Extracting Course Title ---")
-    course_title = extract_course_title(start_url, session)
+    course_title = extract_course_title(start_url, session, debug=debug)
+
+    # Check if extracted title is an access-denied placeholder
+    if course_title and is_access_denied_title(course_title):
+        detected_placeholder = course_title
+        show_access_denied_warning(detected_placeholder, start_url)
+
+        # Try to get the real title from existing metadata or base folder
+        real_title = None
+
+        # If base_download_path is provided (update mode), check for existing metadata
+        if base_download_path:
+            metadata_path = os.path.join(base_download_path, "METADATA.md")
+            if os.path.exists(metadata_path):
+                existing_metadata = CourseMetadata.from_yaml_markdown(metadata_path)
+                if existing_metadata and not is_access_denied_title(existing_metadata.course_title):
+                    real_title = existing_metadata.course_title
+                    print(f"✓ Using existing course title from metadata: {real_title}")
+
+            # If still no title, use the folder name
+            if not real_title and os.path.exists(base_download_path):
+                folder_name = os.path.basename(base_download_path)
+                if folder_name and folder_name != DOWNLOAD_FOLDER:
+                    real_title = folder_name
+                    print(f"✓ Using folder name as course title: {real_title}")
+
+        # Use the real title if we found one
+        if real_title:
+            course_title = real_title
+        else:
+            # Last resort: keep the placeholder but warn
+            print(f"⚠️ No existing course title found, using placeholder: {detected_placeholder}")
+
     if course_title:
         print(f"📚 Course: {course_title}")
     else:
         print("⚠️ Could not determine course title. Using default folder name.")
+        if debug:
+            logger.debug("Enable --debug to save HTML and see detailed title extraction attempts")
         course_title = None
 
     # --- Prepare download folder ---
@@ -553,6 +1147,9 @@ def process_single_url(start_url: str, session: requests.Session, base_download_
 
     if total_files == 0:
         print("No downloadable files found.")
+        # Still update metadata and create link file even if no files found
+        metadata_path = os.path.join(final_download_path, "METADATA.md")
+        update_course_metadata(metadata_path, course_title, start_url, [])
         return 0, 0, []
 
     # --- 2. Download Pass ---
@@ -563,7 +1160,15 @@ def process_single_url(start_url: str, session: requests.Session, base_download_
 
     # --- 3. Extract Archives Pass ---
     print("\n--- Starting Extraction Phase ---")
-    num_extracted = extract_all_archives(final_download_path)
+    num_extracted = 0
+
+    # Only extract newly downloaded archives (never re-extract existing ones)
+    if downloaded_files:
+        archive_extensions = ('.zip', '.tar', '.tar.gz', '.tar.bz2', '.7z', '.tgz', '.tbz2')
+        for filepath in downloaded_files:
+            if filepath.lower().endswith(archive_extensions):
+                if extract_archive(filepath):
+                    num_extracted += 1
 
     if num_extracted > 0:
         print(f"✅ Successfully extracted {num_extracted} archive file(s).")
@@ -572,20 +1177,247 @@ def process_single_url(start_url: str, session: requests.Session, base_download_
 
     return num_downloaded, num_extracted, downloaded_files
 
+# --- AUTO-UPDATER HELPER FUNCTIONS ---
+
+def can_access_studon() -> bool:
+    """
+    Verify we can access StudOn with Firefox cookies.
+    Tries to access the 3 most recently updated courses.
+    Returns True if any course is accessible.
+    """
+    try:
+        # Load Firefox cookies
+        cj = browser_cookie3.firefox(domain_name=STUDON_DOMAIN)
+        session = requests.Session()
+        session.cookies.update(cj)
+        session.headers.update({'User-Agent': 'Mozilla/5.0'})
+
+        # Find all courses
+        if not os.path.exists(DOWNLOAD_FOLDER):
+            logger.debug("Download folder doesn't exist yet")
+            return False
+
+        metadata_files = find_all_metadata_files(DOWNLOAD_FOLDER)
+        if not metadata_files:
+            logger.debug("No courses found to verify against")
+            return False
+
+        # Parse last_fetched timestamps from each METADATA.md
+        courses_with_dates = []
+        for metadata_path, source_url, course_folder in metadata_files:
+            try:
+                with open(metadata_path, 'r') as f:
+                    content = f.read()
+                    # Extract "Last fetched: YYYY-MM-DD HH:MM:SS"
+                    match = re.search(r'^Last fetched:\s*(.+)$', content, re.MULTILINE)
+                    if match:
+                        timestamp_str = match.group(1).strip()
+                        try:
+                            last_fetched = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                            courses_with_dates.append((last_fetched, source_url))
+                        except ValueError:
+                            pass  # Skip courses with invalid timestamps
+            except Exception:
+                pass  # Skip courses we can't read
+
+        if not courses_with_dates:
+            logger.debug("No courses with valid timestamps found")
+            return False
+
+        # Sort by most recent and take top 3
+        courses_with_dates.sort(reverse=True, key=lambda x: x[0])
+        recent_courses = [url for _, url in courses_with_dates[:3]]
+
+        # Try to access each recent course
+        for url in recent_courses:
+            try:
+                response = session.get(url, timeout=10)
+                if response.status_code == 200:
+                    logger.debug(f"✓ Successfully accessed StudOn via: {url[:50]}...")
+                    return True  # Valid login!
+            except Exception:
+                continue  # Try next course
+
+        logger.debug("Could not access any recent courses - login may be unavailable")
+        return False
+
+    except Exception as e:
+        logger.debug(f"Cannot access StudOn: {e}")
+        return False
+
+def load_state() -> UpdateState:
+    """Load the last update timestamp from state file."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                data = json.load(f)
+                return UpdateState.from_dict(data)
+        except Exception as e:
+            logger.warning(f"Could not load state file: {e}")
+    return UpdateState(last_update=None, last_success=False)
+
+def save_state(state: UpdateState) -> None:
+    """Save the last update timestamp to state file."""
+    try:
+        # Ensure the download folder exists
+        os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state.to_dict(), f, indent=2)
+    except Exception as e:
+        logger.warning(f"Could not save state file: {e}")
+
+def was_updated_today(state: UpdateState) -> bool:
+    """Check if an update was already performed today."""
+    if not state.last_update:
+        return False
+
+    today = datetime.now().date()
+    last_update_date = state.last_update.date()
+
+    return last_update_date == today
+
+def update_all_courses(debug: bool = False) -> bool:
+    """Update all courses by scanning METADATA.md files. Returns True if successful."""
+    try:
+        logger.info("🔄 Update All Mode: Scanning for existing courses...")
+
+        # Setup session with cookies
+        try:
+            cj = browser_cookie3.firefox(domain_name=STUDON_DOMAIN)
+            session = requests.Session()
+            session.cookies.update(cj)
+            session.headers.update({'User-Agent': 'Mozilla/5.0'})
+            logger.info("🍪 Firefox cookies loaded successfully.")
+        except Exception as e:
+            raise FirefoxCookieError(e)
+
+        metadata_files = find_all_metadata_files(DOWNLOAD_FOLDER)
+
+        if not metadata_files:
+            logger.warning("No METADATA.md files found. Nothing to update.")
+            return False
+
+        logger.info(f"📚 Found {len(metadata_files)} course(s) to update.")
+
+        total_downloaded = 0
+        total_extracted = 0
+
+        for i, (metadata_path, source_url, course_folder) in enumerate(metadata_files, 1):
+            logger.info(f"📖 Course {i}/{len(metadata_files)}: {os.path.basename(course_folder)}")
+            logger.info(f"   Source: {source_url}")
+
+            try:
+                downloaded, extracted, _ = process_single_url(source_url, session, course_folder, create_course_subfolder=False, debug=debug)
+                total_downloaded += downloaded
+                total_extracted += extracted
+            except Exception as e:
+                logger.error(f"Error processing {source_url}: {e}")
+                continue
+
+        logger.info(f"🎉 Update All Complete! Downloaded: {total_downloaded}, Extracted: {total_extracted}")
+
+        # Return success if we processed at least one course
+        return len(metadata_files) > 0
+
+    except Exception as e:
+        logger.error(f"Error during update: {e}")
+        return False
+
+def run_daily_sync(check_interval_seconds: int = 300) -> None:
+    """
+    Run until a daily sync is performed, then exit.
+    Waits for StudOn login (via Firefox cookies) and performs sync once per day.
+
+    Args:
+        check_interval_seconds: How often to check for StudOn access (default: 5 minutes)
+    """
+    # Check platform compatibility and log warnings
+    check_platform_compatibility()
+
+    state = load_state()
+
+    # Check if already updated today
+    if was_updated_today(state):
+        logger.info(f"Already updated today at {state.last_update}")
+        logger.info("Exiting.")
+        return
+
+    logger.info("Daily sync mode started")
+    logger.info(f"  Will check for StudOn login every {check_interval_seconds // 60} minutes")
+    logger.info(f"  Will exit after successful daily sync")
+
+    while True:
+        try:
+            if not can_access_studon():
+                logger.debug("Waiting for StudOn login...")
+                time.sleep(check_interval_seconds)
+                continue
+
+            logger.info("StudOn access verified, starting sync...")
+
+            if update_all_courses():
+                state.last_update = datetime.now()
+                state.last_success = True
+                save_state(state)
+                logger.info("Daily sync completed successfully!")
+                logger.info("Exiting.")
+                return
+            else:
+                logger.warning("Sync failed, will retry when StudOn login is available...")
+                time.sleep(check_interval_seconds)
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user. Exiting.")
+            return
+        except Exception as e:
+            logger.error(f"Error during daily sync: {e}")
+            time.sleep(check_interval_seconds)
+
 def main() -> None:
     """Main execution loop."""
     global DOWNLOAD_FOLDER
 
     # Parse command-line arguments
-    parser = argparse.ArgumentParser(description='StudOn Recursive File Downloader')
+    parser = argparse.ArgumentParser(description='StudOn Recursive File Downloader & Auto-Updater')
     parser.add_argument('url', nargs='?', help='StudOn URL to download from')
     parser.add_argument('download_path', nargs='?', help='Custom download path')
     parser.add_argument('--update-all', '-u', action='store_true',
                         help='Update all courses by scanning existing METADATA.md files')
+    parser.add_argument('--daily-sync', action='store_true',
+                       help='Wait for Firefox and perform daily sync, then exit (for @reboot cron)')
+    parser.add_argument('--interval', '-i', type=int, default=5,
+                       help='Check interval in minutes for --daily-sync (default: 5)')
+    parser.add_argument('--debug', '-d', action='store_true',
+                       help='Enable debug mode (saves HTML and shows detailed logging)')
+
     args = parser.parse_args()
+
+    # Enable debug logging if requested
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        for handler in logger.handlers:
+            handler.setLevel(logging.DEBUG)
+        logger.debug("Debug mode enabled")
+
+    # Handle daily sync mode
+    if args.daily_sync:
+        check_interval_seconds = args.interval * 60
+        run_daily_sync(check_interval_seconds=check_interval_seconds)
+        return
 
     print("--- StudOn Recursive File Downloader ---")
 
+    # --- Update All Mode ---
+    if args.update_all:
+        # Override DOWNLOAD_FOLDER if custom path was provided
+        if args.download_path:
+            DOWNLOAD_FOLDER = args.download_path
+            logger.info(f"📁 Using custom download folder: {DOWNLOAD_FOLDER}")
+
+        update_all_courses(debug=args.debug)
+        return
+
+    # --- Single URL Mode ---
     # --- Setup Session with Cookies ---
     try:
         print("\nAttempting to load browser cookies...")
@@ -598,81 +1430,6 @@ def main() -> None:
         print(f"❌ An error occurred while loading Firefox cookies: {e}")
         print("   Please ensure you are logged into StudOn in Firefox.")
         return
-
-    # --- Update All Mode ---
-    if args.update_all:
-        print("\n🔄 Update All Mode: Scanning for existing courses...")
-
-        # Override DOWNLOAD_FOLDER if custom path was provided
-        if args.download_path:
-            DOWNLOAD_FOLDER = args.download_path
-            print(f"📁 Using custom download folder: {DOWNLOAD_FOLDER}")
-
-        metadata_files = find_all_metadata_files(DOWNLOAD_FOLDER)
-
-        if not metadata_files:
-            print("❌ No METADATA.md files found. Nothing to update.")
-            return
-
-        print(f"\n📚 Found {len(metadata_files)} course(s) to update.\n")
-
-        total_downloaded = 0
-        total_extracted = 0
-        all_downloaded_files = {}  # Dict[course_folder, List[filepath]]
-
-        for i, (metadata_path, source_url, course_folder) in enumerate(metadata_files, 1):
-            print("=" * 60)
-            print(f"📖 Course {i}/{len(metadata_files)}")
-            print(f"   Folder: {course_folder}")
-            print(f"   Source: {source_url}")
-            print("=" * 60)
-
-            try:
-                # Don't create a course subfolder since we're already in the course folder
-                downloaded, extracted, files_list = process_single_url(source_url, session, course_folder, create_course_subfolder=False)
-                total_downloaded += downloaded
-                total_extracted += extracted
-                if files_list:
-                    all_downloaded_files[course_folder] = files_list
-            except Exception as e:
-                print(f"❌ Error processing {source_url}: {e}")
-                continue
-
-        print("\n" + "=" * 60)
-        print(f"🎉 Update All Complete!")
-        print(f"   Total new files downloaded: {total_downloaded}")
-        print(f"   Total archives extracted: {total_extracted}")
-        print("=" * 60)
-
-        # Display downloaded files organized by course
-        if all_downloaded_files:
-            print("\n📥 Downloaded Files:")
-            print("-" * 60)
-            for course_folder, files in all_downloaded_files.items():
-                # Extract just the course name from the folder path
-                course_name = os.path.basename(course_folder)
-                print(f"\n📁 {course_name} ({len(files)} file{'s' if len(files) != 1 else ''}):")
-                for filepath in files:
-                    # Show relative path from course folder for readability
-                    rel_path = os.path.relpath(filepath, course_folder)
-                    print(f"   • {rel_path}")
-            print()
-
-        # Warn if no files were found at all (likely authentication issue)
-        if total_downloaded == 0 and len(metadata_files) > 0:
-            print("\n⚠️  WARNING: No files found across ANY course!")
-            print("   This usually means one of the following:")
-            print("   1. You're not logged into StudOn in your browser")
-            print("      → Solution: Open Firefox and log into studon.fau.de")
-            print("   2. Browser cookies expired or were cleared")
-            print("      → Solution: Log out and log back in to refresh cookies")
-            print("   3. StudOn changed their HTML structure")
-            print("      → Solution: Check if the script needs updates")
-            print("\n💡 Tip: Open one of the course URLs in your browser to verify access.")
-
-        return
-
-    # --- Single URL Mode ---
     start_url = args.url
     custom_download_path = args.download_path
 
@@ -689,7 +1446,7 @@ def main() -> None:
         print(f"📁 Using custom download folder: {DOWNLOAD_FOLDER}")
 
     # Process the single URL
-    downloaded, extracted, files_list = process_single_url(start_url, session, DOWNLOAD_FOLDER)
+    downloaded, extracted, files_list = process_single_url(start_url, session, DOWNLOAD_FOLDER, debug=args.debug)
 
     print("-" * 50)
     print(f"🎉 Process completed. Downloaded {downloaded} new file(s), extracted {extracted} archive(s).")

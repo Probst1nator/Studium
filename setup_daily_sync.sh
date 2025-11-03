@@ -3,6 +3,71 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# --- PLATFORM DETECTION ---
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║          StudOn Daily Sync Setup                          ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+# Detect the operating system
+OS_TYPE="unknown"
+OS_DISTRO="unknown"
+
+if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    OS_TYPE="linux"
+    # Try to detect Linux distribution
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_DISTRO="$NAME"
+    fi
+elif [[ "$OSTYPE" == "darwin"* ]]; then
+    OS_TYPE="macos"
+elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+    OS_TYPE="windows"
+fi
+
+echo "🖥️  Detected platform: $OS_TYPE ($OS_DISTRO)"
+echo ""
+
+# Check if running on tested platform
+TESTED_PLATFORM=false
+if [[ "$OS_TYPE" == "linux" ]]; then
+    # Check if it's Ubuntu or Kubuntu
+    if [[ "$OS_DISTRO" == *"Ubuntu"* ]] || [[ "$OS_DISTRO" == *"Kubuntu"* ]]; then
+        TESTED_PLATFORM=true
+        echo "✅ Running on tested platform: $OS_DISTRO"
+    fi
+fi
+
+# Show warning for untested platforms
+if [ "$TESTED_PLATFORM" = false ]; then
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║                    ⚠️  WARNING ⚠️                          ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "This setup script has only been tested on Kubuntu/Ubuntu Linux."
+    echo "You are running on: $OS_TYPE ($OS_DISTRO)"
+    echo ""
+    echo "The script may not work correctly on your platform because:"
+    echo "  • Crontab may not be available or work differently"
+    echo "  • Process detection commands may differ"
+    echo "  • Firefox cookie access may be restricted"
+    echo "  • Path conventions may vary"
+    echo ""
+    echo "For non-Ubuntu platforms, you may need to:"
+    echo "  • Manually configure task scheduling"
+    echo "  • Adjust file paths in the cron command"
+    echo "  • Test the scraper manually first"
+    echo ""
+    read -p "Do you want to continue anyway? (y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Setup cancelled. Please check the documentation for manual setup."
+        exit 0
+    fi
+    echo ""
+fi
+
 # Detect Python 3 location
 if command -v python3 &> /dev/null; then
     PYTHON3_PATH=$(which python3)
@@ -40,12 +105,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-CRON_COMMAND="@reboot cd $SCRIPT_DIR && $PYTHON3_PATH $SCRIPT_DIR/studon_auto_updater.py --daily-sync --interval $CHECK_INTERVAL >> $SCRIPT_DIR/studon_sync.log 2>&1"
+CRON_COMMAND="@reboot cd $SCRIPT_DIR && $PYTHON3_PATH $SCRIPT_DIR/studon_scraper.py --daily-sync --interval $CHECK_INTERVAL >> $SCRIPT_DIR/studon_sync.log 2>&1"
 
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║          StudOn Daily Sync Setup                          ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-echo ""
 echo "📋 Configuration:"
 echo "   Script directory: $SCRIPT_DIR"
 echo "   Python 3 path:    $PYTHON3_PATH"
@@ -95,12 +156,12 @@ fi
 
 echo ""
 
-# Check if cron entry already exists
-if crontab -l 2>/dev/null | grep -q "studon_auto_updater.py --daily-sync"; then
+# Check if cron entry already exists (check both old and new format)
+if crontab -l 2>/dev/null | grep -q "studon.*\.py --daily-sync"; then
     echo "⚠️  A daily sync cron job already exists!"
     echo ""
     echo "Current cron jobs:"
-    crontab -l | grep "studon_auto_updater"
+    crontab -l | grep "studon.*\.py --daily-sync"
     echo ""
     read -p "Do you want to replace it? (y/n): " -n 1 -r
     echo
@@ -109,8 +170,8 @@ if crontab -l 2>/dev/null | grep -q "studon_auto_updater.py --daily-sync"; then
         exit 0
     fi
 
-    # Remove old entry
-    crontab -l | grep -v "studon_auto_updater.py --daily-sync" | crontab -
+    # Remove old entry (both old and new format)
+    crontab -l | grep -v "studon.*\.py --daily-sync" | crontab -
     echo "✓ Old entry removed."
     echo ""
 fi
@@ -133,7 +194,7 @@ if [ $? -eq 0 ]; then
     echo "📊 Useful commands:"
     echo "   View live logs:       tail -f $SCRIPT_DIR/studon_sync.log"
     echo "   Check cron jobs:      crontab -l"
-    echo "   Force sync now:       python3 studon_auto_updater.py --once --force"
+    echo "   Force sync now:       python3 studon_scraper.py --once --force"
     echo "   Update all courses:   python3 studon_scraper.py --update-all"
     echo ""
     echo "🔧 To modify or remove:"
