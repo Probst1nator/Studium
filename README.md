@@ -30,7 +30,7 @@ A handpicked list of useful links for FAU students, specifically with KI-Materia
 *   **Opinionated recommendation: Subscribe to some interesting FAU mailinglists**  
     https://www.idm.fau.de/go/mail/subscriptions
 
-*   **Opinionated recommendation: Pick some sports course (best done at the start of a semester)**  
+*   **Opinionated recommendation: Pick some sports course (best done before the start of a semester)**  
     https://www.anmeldung.sport.uni-erlangen.de/hsp/sportarten/aktueller_zeitraum_0
 
 ---
