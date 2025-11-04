@@ -105,7 +105,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-CRON_COMMAND="@reboot cd $SCRIPT_DIR && $PYTHON3_PATH $SCRIPT_DIR/studon_scraper.py --daily-sync --interval $CHECK_INTERVAL >> $SCRIPT_DIR/studon_sync.log 2>&1"
+# Build cron command (only include --interval if it's not the default)
+CRON_COMMAND="@reboot cd $SCRIPT_DIR && $PYTHON3_PATH $SCRIPT_DIR/studon_scraper.py --daily-sync"
+if [ "$CHECK_INTERVAL" -ne 5 ]; then
+    CRON_COMMAND="$CRON_COMMAND --interval $CHECK_INTERVAL"
+fi
 
 echo "📋 Configuration:"
 echo "   Script directory: $SCRIPT_DIR"
@@ -156,23 +160,51 @@ fi
 
 echo ""
 
-# Check if cron entry already exists (check both old and new format)
-if crontab -l 2>/dev/null | grep -q "studon.*\.py --daily-sync"; then
-    echo "⚠️  A daily sync cron job already exists!"
+# Check if cron entry already exists
+EXISTING_ENTRIES=$(crontab -l 2>/dev/null | grep "studon.*\.py --daily-sync" || true)
+
+if [ -n "$EXISTING_ENTRIES" ]; then
+    # Count how many entries exist
+    ENTRY_COUNT=$(echo "$EXISTING_ENTRIES" | grep -c "studon.*\.py --daily-sync" || echo "0")
+
+    # Check if exactly one entry exists and it matches what we're about to add
+    if [ "$ENTRY_COUNT" -eq 1 ] && [ "$EXISTING_ENTRIES" = "$CRON_COMMAND" ]; then
+        echo "╔════════════════════════════════════════════════════════════╗"
+        echo "║          ✅ Already Configured Correctly!                 ║"
+        echo "╚════════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "Current cron entry:"
+        echo "   $EXISTING_ENTRIES"
+        echo ""
+        echo "This matches exactly what would be configured."
+        echo "Nothing to do. Exiting."
+        echo ""
+        exit 0
+    fi
+
+    # Different or multiple entries exist - ask to update
+    if [ "$ENTRY_COUNT" -gt 1 ]; then
+        echo "⚠️  Multiple daily sync cron jobs found!"
+    else
+        echo "⚠️  A different daily sync cron job already exists!"
+    fi
     echo ""
-    echo "Current cron jobs:"
-    crontab -l | grep "studon.*\.py --daily-sync"
+    echo "Current entry/entries:"
+    echo "$EXISTING_ENTRIES" | sed 's/^/   /'
+    echo ""
+    echo "New entry would be:"
+    echo "   $CRON_COMMAND"
     echo ""
     read -p "Do you want to replace it? (y/n): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Setup cancelled."
+        echo "Setup cancelled. Keeping existing entry/entries."
         exit 0
     fi
 
-    # Remove old entry (both old and new format)
+    # Remove old entry/entries
     crontab -l | grep -v "studon.*\.py --daily-sync" | crontab -
-    echo "✓ Old entry removed."
+    echo "✓ Old entry/entries removed."
     echo ""
 fi
 
